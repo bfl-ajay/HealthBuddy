@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Start HealthGram - Web",
+			"type": "shell",
+			"command": "npm run web",
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}

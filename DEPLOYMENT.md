@@ -36,6 +36,9 @@ sudo apt-get install -y nodejs
 # Install PM2 (Process Manager)
 sudo npm install -g pm2
 
+# Install serve (static file server)
+sudo npm install -g serve
+
 # Create application directory
 sudo mkdir -p /opt/healthgram
 sudo chown $USER:$USER /opt/healthgram
@@ -50,8 +53,9 @@ pm2 save
 # npx pm2 startup systemd -u $USER --hp /home/$USER
 # npx pm2 save
 
-# Create health check endpoint (optional but recommended)
-# The workflow checks http://localhost:3000
+# Verify installation
+pm2 --version
+serve --version
 ```
 
 ## Step 2: Generate SSH Key Pair
@@ -141,14 +145,15 @@ The workflow performs these steps:
 
 1. **Checkout** - Clones the repository
 2. **Setup Node.js** - Installs Node 18 with dependency caching
-3. **Install Dependencies** - Runs `npm ci`
-4. **Build** - Creates web build for deployment
-5. **Package** - Creates compressed deployment package
+3. **Install Dependencies** - Runs `npm ci --legacy-peer-deps`
+4. **Build** - Creates static web export using `npx expo export --platform web`
+5. **Package** - Creates compressed deployment package with built files
 6. **AWS Config** - Configures AWS credentials
-7. **Deploy** - Uploads to EC2 and extracts
-8. **Health Check** - Verifies application is running (30 attempts, 10s intervals)
-9. **Notifications** - Sends Slack notification (if configured)
-10. **Cleanup** - Removes sensitive files
+7. **Deploy** - Uploads to EC2 and extracts static files
+8. **Start Server** - Uses `serve` package to serve static files on port 3000
+9. **Health Check** - Verifies application is running (30 attempts, 10s intervals)
+10. **Notifications** - Sends Slack notification (if configured)
+11. **Cleanup** - Removes sensitive files
 
 ## Monitoring Deployment
 
@@ -168,6 +173,12 @@ pm2 status
 ```bash
 # SSH into EC2 and test
 curl http://localhost:3000
+
+# Check PM2 logs
+pm2 logs healthgram
+
+# Check if port is open
+ss -tuln | grep 3000
 ```
 
 ## Rollback on Failure
@@ -236,6 +247,17 @@ pm2 restart healthgram
   ```bash
   sudo systemctl start pm2-$USER
   pm2 status
+  ```
+
+### Issue: Expo Build Command Errors
+- **Cause**: `npm run web` doesn't support `--build-path`. Expo uses different commands.
+- **Solution**: The workflow now uses `npx expo export --platform web --output-dir dist`
+- **What it does**: Creates a static export of the web app ready for deployment
+- **Local testing**:
+  ```bash
+  npx expo export --platform web --output-dir dist
+  npx serve -s dist -l 3000
+  # Open http://localhost:3000
   ```
 
 ### Issue: npm ERESOLVE - Peer Dependency Conflicts

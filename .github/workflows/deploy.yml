@@ -40,13 +40,12 @@ jobs:
       
       - name: Build web application
         run: |
-          npm run web -- --build-path dist
+          npx expo export --platform web --output-dir dist
 
       - name: Create deployment package
         run: |
           mkdir -p deployment
           cp -r dist deployment/
-          cp -r node_modules deployment/
           cp package.json deployment/
           cp package-lock.json deployment/
           cp app.json deployment/
@@ -118,26 +117,22 @@ jobs:
           sudo cp -r deployment/* "$APP_DIR/"
           sudo chown -R $USER:$USER "$APP_DIR"
           
-          # Install dependencies (if not already installed)
           cd "$APP_DIR"
-          npm ci --production
-          
-          # Create environment file
-          echo "[INFO] Creating environment configuration..."
-          cat > .env.production << 'ENVEOF'
-          NODE_ENV=production
-          PORT=${{ secrets.APP_PORT || '3000' }}
-          ENVEOF
           
           # Stop old service (if running)
           echo "[INFO] Stopping old application..."
           sudo systemctl stop healthgram || true
+          pm2 delete healthgram || true
           
-          # Start application with PM2
+          # Install serve package globally to serve static files
+          echo "[INFO] Installing serve package..."
+          sudo npm install -g serve
+          
+          # Start static web server with PM2
           echo "[INFO] Starting application with PM2..."
-          pm2 start npm --name "${{ env.APP_NAME }}" -- start || \
+          pm2 start "serve -s dist -l ${{ secrets.APP_PORT || '3000' }}" --name "${{ env.APP_NAME }}" || \
           pm2 restart "${{ env.APP_NAME }}" || \
-          npx pm2 start npm --name "${{ env.APP_NAME }}" -- start
+          npx pm2 start "serve -s dist -l ${{ secrets.APP_PORT || '3000' }}" --name "${{ env.APP_NAME }}"
           
           pm2 save
           

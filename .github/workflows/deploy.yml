@@ -33,6 +33,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -57,7 +58,7 @@ jobs:
           tar -czf deployment-package.tar.gz deployment/
 
       - name: Upload deployment artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: deployment-package
           path: deployment-package.tar.gz
@@ -179,22 +180,44 @@ jobs:
 
       - name: Slack notification (Success)
         if: success()
-        uses: 8398a7/action-slack@v3
+        uses: slackapi/slack-github-action@v1.26
         with:
-          status: ${{ job.status }}
-          text: '✅ HealthGram deployed successfully to ${{ secrets.EC2_HOST }}'
-          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
-          fields: repo,message,commit,author
+          payload: |
+            {
+              "text": "✅ HealthGram deployed successfully",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *HealthGram Deployment Successful*\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* ${{ github.sha }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
         continue-on-error: true
 
       - name: Slack notification (Failure)
         if: failure()
-        uses: 8398a7/action-slack@v3
+        uses: slackapi/slack-github-action@v1.26
         with:
-          status: ${{ job.status }}
-          text: '❌ HealthGram deployment failed. Check logs for details.'
-          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
-          fields: repo,message,commit,author
+          payload: |
+            {
+              "text": "❌ HealthGram deployment failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *HealthGram Deployment Failed*\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Check logs for details*"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
         continue-on-error: true
 
       - name: Cleanup

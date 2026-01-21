@@ -37,12 +37,7 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
-
-      - name: Lint and validate
-        run: |
-          npm run web --dry-run || true
-        continue-on-error: true
-
+      
       - name: Build web application
         run: |
           npm run web -- --build-path dist

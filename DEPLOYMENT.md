@@ -81,10 +81,15 @@ Navigate to your GitHub repository **Settings → Secrets and variables → Acti
 |---|---|---|
 | `AWS_ACCESS_KEY_ID` | AWS IAM access key | `AKIA*****` |
 | `AWS_SECRET_ACCESS_KEY` | AWS IAM secret key | `wJalrXUtnFEMI/K7MDENG*****` |
-| `AWS_REGION` | AWS region for credentials | `us-east-1` |
 | `EC2_HOST` | EC2 public IP or DNS | `ec2-1-2-3-4.compute-1.amazonaws.com` |
 | `EC2_USER` | EC2 SSH user | `ubuntu` (for Ubuntu AMI) |
 | `EC2_SSH_KEY` | Private SSH key (complete PEM content) | (copy entire `ec2-deploy-key` file content) |
+
+### Recommended Secrets:
+
+| Secret Name | Description | Default |
+|---|---|---|
+| `AWS_REGION` | AWS region for credentials | `us-east-1` |
 | `APP_PORT` | Application port | `3000` |
 
 ### Optional Secrets:
@@ -102,6 +107,8 @@ cat ec2-deploy-key | xargs -0 -I {} echo '{}'
 ```
 
 Paste the **entire private key content** into the `EC2_SSH_KEY` secret (including `-----BEGIN RSA PRIVATE KEY-----` and `-----END RSA PRIVATE KEY-----`).
+
+**Note**: If you don't set `AWS_REGION`, it defaults to `us-east-1`. Set it if you're using a different region.
 
 ## Step 4: AWS IAM Permissions
 

@@ -238,6 +238,20 @@ pm2 restart healthgram
   pm2 status
   ```
 
+### Issue: npm ERESOLVE - Peer Dependency Conflicts
+- **Cause**: `expo-router@4.0.0` requires `expo-constants@~17.0.8` but project has `expo-constants@^18.0.13`
+- **Solution**: The workflow uses `npm ci --legacy-peer-deps` to resolve this conflict
+- **Local Fix** (if needed):
+  ```bash
+  npm ci --legacy-peer-deps
+  # or
+  npm install --legacy-peer-deps
+  ```
+- **Alternative**: Update package.json to use compatible versions:
+  ```json
+  "expo-constants": "~17.0.8"
+  ```
+
 ## Security Best Practices
 
 1. ✅ Store SSH keys only in GitHub Secrets (never in code)

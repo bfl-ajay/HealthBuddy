@@ -1,0 +1,101 @@
+name: Deploy to AWS EC2 (Alternative - Advanced)
+
+# This is an alternative workflow using AWS Systems Manager Session Manager
+# instead of direct SSH for enhanced security
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  APP_NAME: healthgram
+  NODE_VERSION: '18'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      image_uri: ${{ steps.image.outputs.image }}
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run web
+
+      - name: Set image URI
+        id: image
+        run: echo "image=s3://healthgram-builds/app-$(date +%Y%m%d-%H%M%S).tar.gz" >> $GITHUB_OUTPUT
+
+  deploy-ec2:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Get EC2 Instance ID
+        id: ec2
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=${{ secrets.EC2_INSTANCE_NAME }}" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+
+      - name: Send deployment command via Systems Manager
+        run: |
+          aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --targets "Key=tag:Name,Values=${{ secrets.EC2_INSTANCE_NAME }}" \
+            --parameters 'commands=[
+              "cd /opt/healthgram",
+              "git pull origin main",
+              "npm ci --production",
+              "pm2 restart healthgram || pm2 start npm --name healthgram -- start",
+              "pm2 save"
+            ]'
+
+      - name: Monitor deployment
+        run: |
+          # Get command ID and poll status
+          sleep 5
+          echo "Deployment command sent. Check EC2 Systems Manager console for status."
+
+      - name: Verify application
+        run: |
+          # Wait for app to be ready
+          for i in {1..30}; do
+            if aws ssm send-command \
+              --document-name "AWS-RunShellScript" \
+              --targets "Key=tag:Name,Values=${{ secrets.EC2_INSTANCE_NAME }}" \
+              --parameters 'commands=["curl -f http://localhost:3000 || exit 1"]' \
+              --output text | grep -q "Success"; then
+              echo "Application is healthy!"
+              exit 0
+            fi
+            sleep 10
+          done

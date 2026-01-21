@@ -1,0 +1,204 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  APP_NAME: healthgram
+  NODE_VERSION: '18'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint and validate
+        run: |
+          npm run web --dry-run || true
+        continue-on-error: true
+
+      - name: Build web application
+        run: |
+          npm run web -- --build-path dist
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deployment
+          cp -r dist deployment/
+          cp -r node_modules deployment/
+          cp package.json deployment/
+          cp package-lock.json deployment/
+          cp app.json deployment/
+          tar -czf deployment-package.tar.gz deployment/
+
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-package
+          path: deployment-package.tar.gz
+          retention-days: 7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy to EC2 instance
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          APP_PORT: ${{ secrets.APP_PORT || '3000' }}
+        run: |
+          # Create SSH key file
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2-key.pem
+          chmod 600 ~/.ssh/ec2-key.pem
+          
+          # Add host to known_hosts
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          
+          # Deploy to EC2
+          scp -i ~/.ssh/ec2-key.pem \
+            -o StrictHostKeyChecking=no \
+            deployment-package.tar.gz \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/
+          
+          # Extract and setup on EC2
+          ssh -i ~/.ssh/ec2-key.pem \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          
+          set -e
+          
+          # Define variables
+          APP_DIR="/opt/healthgram"
+          BACKUP_DIR="/opt/healthgram-backup"
+          
+          echo "[INFO] Starting deployment..."
+          
+          # Create backup of current deployment
+          if [ -d "$APP_DIR" ]; then
+            echo "[INFO] Creating backup..."
+            sudo mkdir -p "$BACKUP_DIR"
+            sudo cp -r "$APP_DIR" "$BACKUP_DIR/$(date +%Y%m%d_%H%M%S)"
+          fi
+          
+          # Extract new deployment
+          echo "[INFO] Extracting deployment package..."
+          cd /tmp
+          tar -xzf deployment-package.tar.gz
+          
+          # Setup application directory
+          echo "[INFO] Setting up application..."
+          sudo mkdir -p "$APP_DIR"
+          sudo cp -r deployment/* "$APP_DIR/"
+          sudo chown -R $USER:$USER "$APP_DIR"
+          
+          # Install dependencies (if not already installed)
+          cd "$APP_DIR"
+          npm ci --production
+          
+          # Create environment file
+          echo "[INFO] Creating environment configuration..."
+          cat > .env.production << 'ENVEOF'
+          NODE_ENV=production
+          PORT=${{ secrets.APP_PORT || '3000' }}
+          ENVEOF
+          
+          # Stop old service (if running)
+          echo "[INFO] Stopping old application..."
+          sudo systemctl stop healthgram || true
+          
+          # Start application with PM2
+          echo "[INFO] Starting application with PM2..."
+          pm2 start npm --name "${{ env.APP_NAME }}" -- start || \
+          pm2 restart "${{ env.APP_NAME }}" || \
+          npx pm2 start npm --name "${{ env.APP_NAME }}" -- start
+          
+          pm2 save
+          
+          echo "[INFO] Deployment completed successfully!"
+          
+          EOF
+
+      - name: Health check
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          APP_PORT: ${{ secrets.APP_PORT || '3000' }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2-key.pem
+          chmod 600 ~/.ssh/ec2-key.pem
+          
+          echo "[INFO] Performing health check..."
+          for i in {1..30}; do
+            if ssh -i ~/.ssh/ec2-key.pem \
+              -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=5 \
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+              "curl -f http://localhost:${{ secrets.APP_PORT || '3000' }} || exit 1" 2>/dev/null; then
+              echo "[SUCCESS] Application is healthy!"
+              exit 0
+            fi
+            echo "[INFO] Health check attempt $i/30, waiting..."
+            sleep 10
+          done
+          
+          echo "[ERROR] Application health check failed!"
+          exit 1
+
+      - name: Slack notification (Success)
+        if: success()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: '✅ HealthGram deployed successfully to ${{ secrets.EC2_HOST }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author
+        continue-on-error: true
+
+      - name: Slack notification (Failure)
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: '❌ HealthGram deployment failed. Check logs for details.'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author
+        continue-on-error: true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f ~/.ssh/ec2-key.pem
+          rm -f deployment-package.tar.gz

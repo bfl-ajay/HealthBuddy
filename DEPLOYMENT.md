@@ -267,6 +267,25 @@ pm2 restart healthgram
   # Open http://localhost:3000
   ```
 
+### Issue: Netlify Deploy - npm ERESOLVE Error
+- **Cause**: `expo-router@4.0.22` requires `expo-constants@~17.0.8` but project has `expo-constants@18.0.13`
+- **Solution**: A `.npmrc` file has been added to the project root with `legacy-peer-deps=true`
+- **What it does**: Tells npm to ignore peer dependency conflicts during installation
+- **Netlify impact**: Netlify respects the `.npmrc` file and will use this setting automatically
+- **Recommended next step**: Check for newer `expo-router` versions that support `expo-constants@18`:
+  ```bash
+  npm info expo-router@latest peerDependencies
+  npm info expo-router@4.0.22 peerDependencies
+  ```
+- **To upgrade** (if compatible version found):
+  ```bash
+  npm install expo-router@X.Y.Z --save
+  npm install
+  git add package.json package-lock.json .npmrc
+  git commit -m "Upgrade expo-router for expo-constants v18 compatibility"
+  git push origin main
+  ```
+
 ### Issue: npm ERESOLVE - Peer Dependency Conflicts
 - **Cause**: `expo-router@4.0.0` requires `expo-constants@~17.0.8` but project has `expo-constants@^18.0.13`
 - **Solution**: The workflow uses `npm ci --legacy-peer-deps` to resolve this conflict

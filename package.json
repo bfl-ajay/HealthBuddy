@@ -19,6 +19,7 @@
     "expo-router": "~4.0.0",
     "expo-sqlite": "^16.0.10",
     "expo-status-bar": "~2.0.0",
+    "mongodb": "^6.3.0",
     "react": "18.3.1",
     "react-dom": "^18.3.1",
     "react-native": "0.76.5",

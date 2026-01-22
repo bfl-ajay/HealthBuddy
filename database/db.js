@@ -1,136 +1,124 @@
-import { Platform } from 'react-native';
-import * as SQLite from 'expo-sqlite';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { MongoClient, ObjectId } from 'mongodb';
 
-const DB_NAME = 'healthgram.db';
-const isWeb = Platform.OS === 'web';
+// MongoDB Connection
+const MONGODB_URI = process.env.EXPO_PUBLIC_MONGODB_URI || 'mongodb+srv://healthbuddy:Health_1@healthbuddy.qtivokh.mongodb.net/?appName=healthBuddy';
+const DB_NAME = 'healthbuddy';
+const COLLECTIONS = {
+  USERS: 'users',
+  BLOOD_PRESSURE: 'blood_pressure',
+  SESSIONS: 'sessions'
+};
 
+let client = null;
 let db = null;
 
-// Initialize database based on platform
+// Initialize MongoDB connection
 export const initDatabase = async () => {
   try {
-    if (!isWeb) {
-      // Use SQLite for mobile
-      db = await SQLite.openDatabaseAsync(DB_NAME);
+    if (!client) {
+      client = new MongoClient(MONGODB_URI);
+      await client.connect();
+      db = client.db(DB_NAME);
       
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          email TEXT UNIQUE NOT NULL,
-          password TEXT NOT NULL,
-          height REAL,
-          weight REAL,
-          age INTEGER,
-          bloodGroup TEXT,
-          allergies TEXT,
-          createdAt TEXT NOT NULL
-        );
-      `);
-
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS blood_pressure (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          userId INTEGER NOT NULL,
-          systolic INTEGER NOT NULL,
-          diastolic INTEGER NOT NULL,
-          heartRate INTEGER NOT NULL,
-          timestamp TEXT NOT NULL,
-          FOREIGN KEY (userId) REFERENCES users (id)
-        );
-      `);
-
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS sessions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          userId INTEGER NOT NULL,
-          isActive INTEGER DEFAULT 1,
-          FOREIGN KEY (userId) REFERENCES users (id)
-        );
-      `);
+      // Create collections if they don't exist
+      const collections = await db.listCollections().toArray();
+      const collectionNames = collections.map(c => c.name);
+      
+      if (!collectionNames.includes(COLLECTIONS.USERS)) {
+        await db.createCollection(COLLECTIONS.USERS);
+        // Create unique index on email
+        await db.collection(COLLECTIONS.USERS).createIndex({ email: 1 }, { unique: true });
+      }
+      
+      if (!collectionNames.includes(COLLECTIONS.BLOOD_PRESSURE)) {
+        await db.createCollection(COLLECTIONS.BLOOD_PRESSURE);
+        // Create index on userId for faster queries
+        await db.collection(COLLECTIONS.BLOOD_PRESSURE).createIndex({ userId: 1, timestamp: -1 });
+      }
+      
+      if (!collectionNames.includes(COLLECTIONS.SESSIONS)) {
+        await db.createCollection(COLLECTIONS.SESSIONS);
+        // Create index on userId
+        await db.collection(COLLECTIONS.SESSIONS).createIndex({ userId: 1 });
+      }
     }
     
-    console.log('Database initialized successfully for', Platform.OS);
+    console.log('MongoDB Database initialized successfully');
     return true;
   } catch (error) {
-    console.error('Error initializing database:', error);
+    console.error('Error initializing MongoDB:', error);
     throw error;
   }
 };
 
-// Web-specific storage helpers
-const getWebUsers = async () => {
-  const users = await AsyncStorage.getItem('users');
-  return users ? JSON.parse(users) : [];
-};
-
-const setWebUsers = async (users) => {
-  await AsyncStorage.setItem('users', JSON.stringify(users));
-};
-
-const getWebReadings = async (userId) => {
-  const readings = await AsyncStorage.getItem(`bp_${userId}`);
-  return readings ? JSON.parse(readings) : [];
-};
-
-const setWebReadings = async (userId, readings) => {
-  await AsyncStorage.setItem(`bp_${userId}`, JSON.stringify(readings));
+// Close database connection
+export const closeDatabase = async () => {
+  try {
+    if (client) {
+      await client.close();
+      client = null;
+      db = null;
+      console.log('MongoDB connection closed');
+    }
+  } catch (error) {
+    console.error('Error closing MongoDB connection:', error);
+    throw error;
+  }
 };
 
 // User Operations
 export const createUser = async (name, email, password) => {
   try {
+    if (!db) throw new Error('Database not initialized');
+    
     const createdAt = new Date().toISOString();
-
-    if (isWeb) {
-      // Web implementation with AsyncStorage
-      const users = await getWebUsers();
-      
-      if (users.find(u => u.email === email)) {
-        throw new Error('User already exists');
-      }
-
-      const newUser = {
-        id: Date.now(),
-        name,
-        email,
-        password,
-        createdAt
-      };
-
-      users.push(newUser);
-      await setWebUsers(users);
-      return newUser;
-    } else {
-      // Mobile implementation with SQLite
-      const result = await db.runAsync(
-        'INSERT INTO users (name, email, password, createdAt) VALUES (?, ?, ?, ?)',
-        [name, email, password, createdAt]
-      );
-
-      return { id: result.lastInsertRowId, name, email, createdAt };
-    }
-  } catch (error) {
-    if (error.message.includes('UNIQUE constraint failed') || error.message.includes('already exists')) {
+    const usersCollection = db.collection(COLLECTIONS.USERS);
+    
+    // Check if user already exists
+    const existingUser = await usersCollection.findOne({ email });
+    if (existingUser) {
       throw new Error('User already exists');
     }
+    
+    const newUser = {
+      name,
+      email,
+      password,
+      height: null,
+      weight: null,
+      age: null,
+      bloodGroup: null,
+      allergies: null,
+      createdAt
+    };
+    
+    const result = await usersCollection.insertOne(newUser);
+    
+    return {
+      id: result.insertedId.toString(),
+      ...newUser
+    };
+  } catch (error) {
+    console.error('Error creating user:', error);
     throw error;
   }
 };
 
 export const getUserByEmailAndPassword = async (email, password) => {
   try {
-    if (isWeb) {
-      const users = await getWebUsers();
-      return users.find(u => u.email === email && u.password === password) || null;
-    } else {
-      const result = await db.getFirstAsync(
-        'SELECT * FROM users WHERE email = ? AND password = ?',
-        [email, password]
-      );
-      return result;
+    if (!db) throw new Error('Database not initialized');
+    
+    const usersCollection = db.collection(COLLECTIONS.USERS);
+    const user = await usersCollection.findOne({ email, password });
+    
+    if (user) {
+      return {
+        id: user._id.toString(),
+        ...user
+      };
     }
+    
+    return null;
   } catch (error) {
     console.error('Error getting user:', error);
     throw error;
@@ -139,16 +127,19 @@ export const getUserByEmailAndPassword = async (email, password) => {
 
 export const getUserById = async (userId) => {
   try {
-    if (isWeb) {
-      const users = await getWebUsers();
-      return users.find(u => u.id === userId) || null;
-    } else {
-      const result = await db.getFirstAsync(
-        'SELECT * FROM users WHERE id = ?',
-        [userId]
-      );
-      return result;
+    if (!db) throw new Error('Database not initialized');
+    
+    const usersCollection = db.collection(COLLECTIONS.USERS);
+    const user = await usersCollection.findOne({ _id: new ObjectId(userId) });
+    
+    if (user) {
+      return {
+        id: user._id.toString(),
+        ...user
+      };
     }
+    
+    return null;
   } catch (error) {
     console.error('Error getting user by ID:', error);
     throw error;
@@ -157,37 +148,34 @@ export const getUserById = async (userId) => {
 
 export const updateUserProfile = async (userId, profileData) => {
   try {
+    if (!db) throw new Error('Database not initialized');
+    
     const { height, weight, age, bloodGroup, allergies } = profileData;
-
-    if (isWeb) {
-      const users = await getWebUsers();
-      const userIndex = users.findIndex(u => u.id === userId);
-      
-      if (userIndex === -1) {
-        throw new Error('User not found');
-      }
-
-      users[userIndex] = {
-        ...users[userIndex],
-        height,
-        weight,
-        age,
-        bloodGroup,
-        allergies
+    const usersCollection = db.collection(COLLECTIONS.USERS);
+    
+    const result = await usersCollection.findOneAndUpdate(
+      { _id: new ObjectId(userId) },
+      {
+        $set: {
+          height,
+          weight,
+          age,
+          bloodGroup,
+          allergies,
+          updatedAt: new Date().toISOString()
+        }
+      },
+      { returnDocument: 'after' }
+    );
+    
+    if (result.value) {
+      return {
+        id: result.value._id.toString(),
+        ...result.value
       };
-
-      await setWebUsers(users);
-      return users[userIndex];
-    } else {
-      await db.runAsync(
-        `UPDATE users 
-         SET height = ?, weight = ?, age = ?, bloodGroup = ?, allergies = ?
-         WHERE id = ?`,
-        [height, weight, age, bloodGroup, allergies, userId]
-      );
-
-      return await getUserById(userId);
     }
+    
+    throw new Error('User not found');
   } catch (error) {
     console.error('Error updating user profile:', error);
     throw error;
@@ -197,15 +185,21 @@ export const updateUserProfile = async (userId, profileData) => {
 // Session Operations
 export const createSession = async (userId) => {
   try {
-    if (isWeb) {
-      await AsyncStorage.setItem('activeSession', JSON.stringify({ userId }));
-    } else {
-      await db.runAsync('UPDATE sessions SET isActive = 0 WHERE isActive = 1');
-      await db.runAsync(
-        'INSERT INTO sessions (userId, isActive) VALUES (?, 1)',
-        [userId]
-      );
-    }
+    if (!db) throw new Error('Database not initialized');
+    
+    const sessionsCollection = db.collection(COLLECTIONS.SESSIONS);
+    
+    // Clear any existing active sessions for this user
+    await sessionsCollection.deleteMany({ userId: new ObjectId(userId) });
+    
+    // Create new session
+    const session = {
+      userId: new ObjectId(userId),
+      isActive: true,
+      createdAt: new Date().toISOString()
+    };
+    
+    await sessionsCollection.insertOne(session);
   } catch (error) {
     console.error('Error creating session:', error);
     throw error;
@@ -214,23 +208,16 @@ export const createSession = async (userId) => {
 
 export const getActiveSession = async () => {
   try {
-    if (isWeb) {
-      const session = await AsyncStorage.getItem('activeSession');
-      if (session) {
-        const { userId } = JSON.parse(session);
-        return await getUserById(userId);
-      }
-      return null;
-    } else {
-      const session = await db.getFirstAsync(
-        'SELECT userId FROM sessions WHERE isActive = 1 LIMIT 1'
-      );
-      
-      if (session) {
-        return await getUserById(session.userId);
-      }
-      return null;
+    if (!db) throw new Error('Database not initialized');
+    
+    const sessionsCollection = db.collection(COLLECTIONS.SESSIONS);
+    const session = await sessionsCollection.findOne({ isActive: true });
+    
+    if (session) {
+      return await getUserById(session.userId.toString());
     }
+    
+    return null;
   } catch (error) {
     console.error('Error getting active session:', error);
     return null;
@@ -239,11 +226,13 @@ export const getActiveSession = async () => {
 
 export const clearSession = async () => {
   try {
-    if (isWeb) {
-      await AsyncStorage.removeItem('activeSession');
-    } else {
-      await db.runAsync('UPDATE sessions SET isActive = 0 WHERE isActive = 1');
-    }
+    if (!db) throw new Error('Database not initialized');
+    
+    const sessionsCollection = db.collection(COLLECTIONS.SESSIONS);
+    await sessionsCollection.updateMany(
+      { isActive: true },
+      { $set: { isActive: false } }
+    );
   } catch (error) {
     console.error('Error clearing session:', error);
     throw error;
@@ -253,36 +242,29 @@ export const clearSession = async () => {
 // Blood Pressure Operations
 export const addBloodPressureReading = async (userId, systolic, diastolic, heartRate) => {
   try {
+    if (!db) throw new Error('Database not initialized');
+    
     const timestamp = new Date().toISOString();
-
-    if (isWeb) {
-      const readings = await getWebReadings(userId);
-      const newReading = {
-        id: Date.now(),
-        userId,
-        systolic,
-        diastolic,
-        heartRate,
-        timestamp
-      };
-      readings.unshift(newReading);
-      await setWebReadings(userId, readings);
-      return newReading;
-    } else {
-      const result = await db.runAsync(
-        'INSERT INTO blood_pressure (userId, systolic, diastolic, heartRate, timestamp) VALUES (?, ?, ?, ?, ?)',
-        [userId, systolic, diastolic, heartRate, timestamp]
-      );
-
-      return {
-        id: result.lastInsertRowId,
-        userId,
-        systolic,
-        diastolic,
-        heartRate,
-        timestamp
-      };
-    }
+    const bpCollection = db.collection(COLLECTIONS.BLOOD_PRESSURE);
+    
+    const newReading = {
+      userId: new ObjectId(userId),
+      systolic,
+      diastolic,
+      heartRate,
+      timestamp
+    };
+    
+    const result = await bpCollection.insertOne(newReading);
+    
+    return {
+      id: result.insertedId.toString(),
+      userId,
+      systolic,
+      diastolic,
+      heartRate,
+      timestamp
+    };
   } catch (error) {
     console.error('Error adding blood pressure reading:', error);
     throw error;
@@ -291,15 +273,22 @@ export const addBloodPressureReading = async (userId, systolic, diastolic, heart
 
 export const getBloodPressureReadings = async (userId) => {
   try {
-    if (isWeb) {
-      return await getWebReadings(userId);
-    } else {
-      const readings = await db.getAllAsync(
-        'SELECT * FROM blood_pressure WHERE userId = ? ORDER BY timestamp DESC',
-        [userId]
-      );
-      return readings;
-    }
+    if (!db) throw new Error('Database not initialized');
+    
+    const bpCollection = db.collection(COLLECTIONS.BLOOD_PRESSURE);
+    const readings = await bpCollection
+      .find({ userId: new ObjectId(userId) })
+      .sort({ timestamp: -1 })
+      .toArray();
+    
+    return readings.map(reading => ({
+      id: reading._id.toString(),
+      userId: reading.userId.toString(),
+      systolic: reading.systolic,
+      diastolic: reading.diastolic,
+      heartRate: reading.heartRate,
+      timestamp: reading.timestamp
+    }));
   } catch (error) {
     console.error('Error getting blood pressure readings:', error);
     return [];
@@ -308,11 +297,13 @@ export const getBloodPressureReadings = async (userId) => {
 
 export const deleteBloodPressureReading = async (readingId) => {
   try {
-    if (isWeb) {
-      // Not implemented for web in this version
-      throw new Error('Delete not implemented for web');
-    } else {
-      await db.runAsync('DELETE FROM blood_pressure WHERE id = ?', [readingId]);
+    if (!db) throw new Error('Database not initialized');
+    
+    const bpCollection = db.collection(COLLECTIONS.BLOOD_PRESSURE);
+    const result = await bpCollection.deleteOne({ _id: new ObjectId(readingId) });
+    
+    if (result.deletedCount === 0) {
+      throw new Error('Reading not found');
     }
   } catch (error) {
     console.error('Error deleting blood pressure reading:', error);
@@ -323,21 +314,26 @@ export const deleteBloodPressureReading = async (readingId) => {
 // Utility functions
 export const clearAllData = async () => {
   try {
-    if (isWeb) {
-      await AsyncStorage.multiRemove(['users', 'activeSession']);
-      const keys = await AsyncStorage.getAllKeys();
-      const bpKeys = keys.filter(k => k.startsWith('bp_'));
-      await AsyncStorage.multiRemove(bpKeys);
-    } else {
-      await db.execAsync(`
-        DELETE FROM blood_pressure;
-        DELETE FROM sessions;
-        DELETE FROM users;
-      `);
+    if (!db) throw new Error('Database not initialized');
+    
+    const collections = [
+      COLLECTIONS.BLOOD_PRESSURE,
+      COLLECTIONS.SESSIONS,
+      COLLECTIONS.USERS
+    ];
+    
+    for (const collectionName of collections) {
+      const collection = db.collection(collectionName);
+      await collection.deleteMany({});
     }
+    
     console.log('All data cleared');
   } catch (error) {
     console.error('Error clearing data:', error);
     throw error;
   }
 };
+
+// Export MongoDB client for advanced queries if needed
+export const getMongoClient = () => client;
+export const getMongoDb = () => db;

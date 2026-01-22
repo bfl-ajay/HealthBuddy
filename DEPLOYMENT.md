@@ -1,5 +1,7 @@
 # AWS EC2 Deployment Guide
 
+**⚠️ Important Update:** The application now uses **MongoDB Atlas** for cloud-based data storage. See [database/README_MONGODB.md](database/README_MONGODB.md) for database setup.
+
 This guide explains how to set up GitHub Actions to automatically deploy the HealthGram application to an AWS EC2 instance.
 
 ## Prerequisites
@@ -8,6 +10,7 @@ This guide explains how to set up GitHub Actions to automatically deploy the Hea
 2. **GitHub Repository** with this workflow file
 3. **GitHub Secrets** configured
 4. **EC2 Instance Setup** with required software
+5. **MongoDB Atlas** account and cluster (for database)
 
 ## Step 1: EC2 Instance Setup
 
